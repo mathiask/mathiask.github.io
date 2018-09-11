@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8"/>
+        <title>ASPEP BZW Parser Tester</title>
+    </head>
+    <body>
+        <h1>ASPEP BZW Parser Tester</h1>
+        <form onsubmit="return doParse()">
+            <input id="in">
+            <button>Parse</button>
+        </form>
+        <pre id="result"></pre>
+        <script>
+         function doParse(e) {
+             let s = document.getElementById('in').value,
+                 result = document.getElementById('result');
+             result.innerHTML = "";
+             try {
+                 let x = parse(s);
+                 result.append(JSON.stringify(x, undefined, 2));
+             } catch(s) { alert(`Parse Error: ${s}!`); }
+             return false;
+         }
+
+         // This is a recursive decent parser.  It implements the following
+         // grammar, expressed in Haskell Text.ParserCombinators.ReadP syntax:
+         // ">>" is concatenation and "+++" is alternative:
+         //
+         // b = jbts +++ bt
+         // jbts = jbt +++ (jbt >> char '/' >> jbts)          -- joinable BTs
+         // bt = jbt +++ btc
+         // jbt = (char '(' >> btc >> char ')') +++ n +++ sa
+         // btc = n +++ p +++ (p >> char '&' >> n)
+         // p = (char '(' >> pc >> char ')') +++ pc           -- positive
+         // pc = sa +++ (sa >> char '&' >> pc)                -- P core
+         // n = string "not(" >> nc >> char ')'
+         // nc = sa +++ (sa >> char '/' >> nc)
+         // sa = ...
+         //
+         // Unfortunately, this grammar is not LL(k), i.e. it cannot be parsed
+         // by finite lookahead.
+         // Luckily this is not a real problem in this particular case as we can
+         // decide using simple  lookahead at the rest of the string:
+         // - The rule "b" is ambiguous, but "bt" can parse everything that
+         //   "jbt" can parse, and thus we need to pick "jbts" if and only if
+         //   there is a top level (not nested under "not") or "/".
+         // - Similarly, "bt" is a problem. But "n" and "sa" can be handled by
+         //   "btc" and thus it is safe to pick "btc" unless the string starts
+         //   with a parenthesis "(".  In this case we have to find out if its
+         //   matching ")" is followed by "&" (which then implies that it is
+         //   followed by "&not(") in which case we must also choose "bt -> btc"
+         //   so that the "(" is parsed as part of "p".
+         //
+         // (Mathias Kegelmann, 2018-09-10)
+         function parse(s) {
+             let [x, rest] = b(s);
+             if (rest != "") throw `Unparsed tail: ${rest}`;
+             return x;
+         }
+
+         function b(s) {
+             return hasTopLevelOr(s) ? jbts(s) : bt(s);
+         }
+
+         function hasTopLevelOr(s) {
+             let lvl = 0;
+             for (let c of s) {
+                 if (c === '/' && lvl === 0) return true;
+                 else if (c === '(') lvl++;
+                 else if (c === ')') lvl--;
+             }
+             return false;
+         }
+
+         function jbts(s) {
+             let [x, rest] = jbt(s);
+             if (rest.startsWith('/')) {
+                 let [xs, rest2] = jbts(rest.slice(1));
+                 return [[x].concat(xs), rest2];
+             } else {
+                 return [[x], rest];
+             }
+         }
+
+         function bt(s) {
+             let [x, rest] = (!s.startsWith('(') || lookingAtParaenthesizedPos(s))
+                           ? btc(s) : jbt(s);
+             return [[x], rest];
+         }
+
+         function lookingAtParaenthesizedPos(s) {
+             if (!s.startsWith('(')) return false;
+             let i, lvl = 1;
+             for (i = 1; i < s.length; i++) {
+                 if (s[i] === '(') lvl++;
+                 else if (s[i] === ')') {
+                     if (--lvl === 0) return i < s.length - 1 && s[i+1] === '&';
+                 }
+             }
+             return false;
+         }
+
+         function jbt(s) {
+             if (s.startsWith('(')) {
+                 let [x, rest] = btc(s.slice(1));
+                 if (!rest.startsWith(')')) throw 'Missing ")" in JBT';
+                 return [x, rest.slice(1)];
+             } else if (s.startsWith('not(')) {
+                 let [x, rest] = n(s);
+                 return [[[], x], rest];
+             } else { // SA
+                 let [x, rest] = sa(s);
+                 return [[[x], []], rest];
+             }
+         }
+
+         function btc(s) {
+             if (s.startsWith('not(')) {
+                 let [x, rest] = n(s);
+                 return [[[], x], rest];
+             } else  {
+                 let [x, rest] = p(s);
+                 if (rest.startsWith('&')) {
+                     let [x2, rest2] = n(rest.slice(1));
+                     return [[x, x2], rest2];
+                 } else {
+                     return [[x, []], rest];
+                 }
+             }
+         }
+
+         function p(s) {
+             if (s.startsWith('(')) {
+                 let [x, rest] = pc(s);
+                 if (!rest.startsWith(')')) throw 'Missing ")" in P';
+                 return [x, rest.slice(1)];
+             } else {
+                 return pc(s);
+             }
+         }
+
+         function pc(s) {
+             let [x, rest] = sa(s);
+             if (rest.startsWith('&') && !rest.startsWith('&not(')) {
+                 let [x2, rest2] = pc(rest.slice(1));
+                 return [[x].concat(x2), rest2];
+             } else {
+                 return [[x], rest];
+             }
+         }
+
+         function n(s) {
+             if (!s.startsWith('not(')) throw 'Expecting "not("';
+             let [x, rest] = nc(s.slice(4));
+             if (!rest.startsWith(')')) throw 'Missing ")" in N';
+             return [x, rest.slice(1)];
+         }
+
+         function nc(s) {
+             let [x, rest] = sa(s);
+             if (rest.startsWith('/')) {
+                 let [x2, rest2] = nc(rest.slice(1));
+                 return [[x].concat(x2), rest2];
+             } else {
+                 return [[x], rest];
+             }
+         }
+
+         function sa(s) {
+             let match = /([a-z0-9]+)(.*)/.exec(s);
+             if (!match) throw 'Expected SA';
+             return [match[1], match[2]];
+         }
+        </script>
+    </body>
+</html>
