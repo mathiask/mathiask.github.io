@@ -168,7 +168,7 @@
          }
 
          function sa(s) {
-             let match = /([a-z0-9]+)(.*)/.exec(s);
+             let match = /^([a-z0-9]+)(.*)/.exec(s);
              if (!match) throw 'Expected SA';
              return [match[1], match[2]];
          }
