@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8"/>
+        <title>ASPEP BZW Parser Tester II</title>
+    </head>
+    <body>
+        <h1>ASPEP BZW Parser Tester II</h1>
+        <h2>Using a small parser combinator library written in JS</h2>
+        <form onsubmit="return doParse()">
+            <input id="in">
+            <button>Parse</button>
+        </form>
+        <pre id="result"></pre>
+        <script>
+         function doParse(e) {
+             let s = document.getElementById('in').value,
+                 result = document.getElementById('result');
+             result.innerHTML = "";
+             try {
+                 let x = parse(s, b);
+                 result.append(JSON.stringify(x, undefined, 2));
+             } catch(s) { alert(`Parse Error: ${s}!`); }
+             return false;
+         }
+
+         // Minimal parser combinator framework in JS:
+         // - The type of parsers is simply String -> [[Object, String]].
+         // - As a design principle, the combinators (other than A)
+         //   + take an optional function combining the sub-results.
+         //   + If this argument is not given, then the default is to return the
+         //     last sub-result.
+         //   + If it is given, but not a function, then it is converted into a
+         //     constant function with this value.
+
+         // Parse a "literal" string (as itself by default)
+         function L(s, f = (_=>s)) {
+             return x => {
+                 return x.startsWith(s) ? [[_app(f, s), x.slice(s.length)]] : [];
+             };
+         }
+
+         // Helper function that applies f to its arguments, if f is a function
+         // or just returns f, otherwsise.
+         function _app(f, ...xs) {
+             return typeof(f) === 'function' ? f(...xs) : f;
+         }
+
+         // Regexp matcher that takes a regexp and a function on the
+         // match object.  The default function is to return the entire
+         // match.
+         // The regexp MUST start with "^".
+         function RE(re, f = m=>m[0]) {
+             return s => {
+                 let match = re.exec(s);
+                 return match ? [[_app(f, match), s.slice(match[0].length)]] : [];
+             };
+         }
+
+         // Alternative p1 | p2 (p1 +++ p2 in Haskell Text.ParserCombinators.ReadP).
+         // This does not take a transformer function.
+         function A(...ps) {
+             return s => {
+                 return ps.flatMap(p => p(s));
+             };
+         }
+
+         // Sequence (not really monadic composition, but using a function to
+         // combine the two results.
+         function S(p1, p2, f = (_,x)=>x) {
+             return s => p1(s).flatMap(([x, r]) =>
+                 p2(r).map(([x2, r2]) => [_app(f, x, x2), r2]));
+         }
+
+         // Variant of S that keeps the first result
+         function S1(p1, p2) { return S(p1, p2, (x,_)=>x); }
+
+         // Apply a transformation function to all results of a contained parser.
+         // There is no default function; hte default is not to use T.
+         function T(p, f) {
+             return s => p(s).map(([x, r]) => [_app(f, x), r]);
+         }
+
+         // Parse a string with a parser and return the first result K
+         // that is a complete parse.
+         function parse(s, p) {
+             return (p(s).find(([x,r]) => r === ''))[0];
+         }
+
+         // ------------------------- The Grammar -------------------------
+
+         // sa = /[a-z0-9]+/
+         // nc = sa | sa '/' nc
+         // n = 'not(' nc ')'
+         // pc = sa | sa '&' pc         -- P core
+         // p = '(' pc >> ')' | pc      -- positive
+         // btc = n | p | p '&' n
+         // jbt = '(' btc ')' | n | sa
+         // bt = jbt | btc
+         // jbts = jbt | jbt '/' jbts   -- joinable BTs
+         // b = jbts | bt
+
+         var sa = RE(/^[a-z0-9]+/),
+             nc = _ => A(T(sa, x=>[x]),
+                         S(S1(sa, L('/')), nc,
+                           (x,xs) => [x].concat(xs)))(_),
+             n = S1(S(L('not('), nc), L(')')),
+             pc = _ => A(T(sa, x=>[x]),
+                         S(S1(sa, L('&')), pc,
+                           (x,xs) => [x].concat(xs)))(_),
+             p = A(S1(S(L('('), pc), L(')')), pc),
+             btc = A(T(n, x=>[[], x]),
+                     T(p, x=>[x, []]),
+                     S(S1(p, L('&')), n,
+                       (x,y) => [x, y])),
+             jbt = A(S1(S(L('('), btc), L(')')),
+                     T(n, x=>[[], x]),
+                     T(sa, x=>[[x],[]])),
+             bt = A(jbt, btc),
+             jbts = _ => A(T(jbt, x=>[x]),
+                           S(S1(jbt, L('/')), jbts,
+                             (x,xs) => [x].concat(xs)))(_),
+             b = A(jbts, bt);
+         // (Mathias Kegelmann, 2018-09-12)
+        </script>
+    </body>
+</html>
